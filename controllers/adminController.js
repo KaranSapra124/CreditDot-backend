@@ -784,7 +784,6 @@ const getAllFranchisesWithCredits = async (req, res) => {
 };
 
 // Create franchise user by admin (admin only)
-// Create franchise user by admin (admin only)
 const createFranchiseUser = async (req, res) => {
   try {
     const { name, email, assignedPackages, role, subRole } = req.body;
@@ -830,18 +829,6 @@ const createFranchiseUser = async (req, res) => {
 
     // ONLY for franchise user
     if (user.role === "franchise_user") {
-      const lastFranchise = await Franchise.findOne({
-        franchiseCode: { $exists: true },
-      }).sort({ createdAt: -1 });
-
-      let nextNumber = 1;
-
-      if (lastFranchise?.franchiseCode) {
-        nextNumber =
-          parseInt(lastFranchise.franchiseCode.replace("FP-", "")) + 1;
-      }
-
-      const franchiseCode = `FP-${String(nextNumber).padStart(3, "0")}`;
       const franchiseData = {
         userId: user._id,
         businessName: name,
@@ -849,10 +836,11 @@ const createFranchiseUser = async (req, res) => {
         email,
 
         phone,
-        franchiseCode, // <-- add this
+        franchiseCode: null, // <-- add this
         kycStatus: "pending",
         agreementSigned: true,
         agreementSignedAt: new Date(),
+        //Login allow
         isActive: true,
       };
 
