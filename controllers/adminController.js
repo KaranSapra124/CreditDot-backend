@@ -799,9 +799,16 @@ const createFranchiseUser = async (req, res) => {
     const existingUser = await User.findOne({ email });
 
     if (existingUser) {
-      return res.status(400).json({
-        message: "User already exists with this email",
-      });
+      // Email held by a soft-deleted account (deleted before email-release
+      // was added) — free it so the email can be reused
+      if (existingUser.isDeleted) {
+        existingUser.email = `deleted_${Date.now()}_${existingUser.email.toLowerCase()}`;
+        await existingUser.save();
+      } else {
+        return res.status(400).json({
+          message: "User already exists with this email",
+        });
+      }
     }
 
     // Generate password
@@ -1486,12 +1493,23 @@ const deleteFranchise = async (req, res) => {
     await franchise.save();
 
     // Soft-delete linked user (block login, keep record)
+    // Rename email to free the unique address so the same email can register again
     if (franchise.userId) {
-      await User.findByIdAndUpdate(franchise.userId, {
-        isDeleted: true,
-        deletedAt: new Date(),
-        isActive: false,
-      });
+      const linkedUser = await User.findById(franchise.userId);
+      if (linkedUser && !linkedUser.isDeleted) {
+        linkedUser.isDeleted = true;
+        linkedUser.deletedAt = new Date();
+        linkedUser.isActive = false;
+        if (linkedUser.email && !linkedUser.email.startsWith("deleted_")) {
+          linkedUser.email = `deleted_${Date.now()}_${linkedUser.email.toLowerCase()}`;
+        }
+        await linkedUser.save();
+      } else if (linkedUser) {
+        linkedUser.isDeleted = true;
+        linkedUser.deletedAt = new Date();
+        linkedUser.isActive = false;
+        await linkedUser.save();
+      }
     }
 
     res.json({
@@ -1523,11 +1541,29 @@ const restoreFranchise = async (req, res) => {
     await franchise.save();
 
     if (franchise.userId) {
-      await User.findByIdAndUpdate(franchise.userId, {
-        isDeleted: false,
-        deletedAt: null,
-        isActive: true,
-      });
+      const linkedUser = await User.findById(franchise.userId);
+      if (linkedUser) {
+        // Reclaim the original email (franchise.email was preserved on delete)
+        const originalEmail = (franchise.email || "").toLowerCase();
+        if (originalEmail) {
+          const takenByOther = await User.findOne({
+            email: originalEmail,
+            _id: { $ne: linkedUser._id },
+            isDeleted: { $ne: true },
+          });
+          if (takenByOther) {
+            return res.status(400).json({
+              message:
+                "Cannot restore: this email is now used by another account",
+            });
+          }
+          linkedUser.email = originalEmail;
+        }
+        linkedUser.isDeleted = false;
+        linkedUser.deletedAt = null;
+        linkedUser.isActive = true;
+        await linkedUser.save();
+      }
     }
 
     res.json({
