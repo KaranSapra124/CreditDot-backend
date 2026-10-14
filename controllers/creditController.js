@@ -1,3 +1,4 @@
+const { isValidPdf } = require("../utils/pdfValidation");
 const axios = require("axios");
 const CreditReport = require("../models/CreditReport");
 const Setting = require("../models/Setting");
@@ -809,47 +810,75 @@ const checkCreditScore = async (req, res) => {
     // If we have a report URL, download and save the PDF locally.
     // Direct PDF links (Surepass + IndiConnect) download inline;
     // IndiConnect htmlUrl-only rows use the background renderer below.
-    if (
-      reportUrl &&
-      !creditReport.localPath &&
-      (!isIndiconnectBureau || !indiconnectClient.isHtmlReportUrl(reportUrl))
-    ) {
+    // Download report only when a local copy does not already exist.
+// IndiConnect HTML reports are handled by the background PDF renderer.
+if (
+  reportUrl &&
+  !creditReport.localPath &&
+  (!isIndiconnectBureau || !indiconnectClient.isHtmlReportUrl(reportUrl))
+) {
+  let localFilePath;
+
+  try {
+    const reportsDir = path.join(__dirname, "../reports");
+
+    if (!fs.existsSync(reportsDir)) {
+      fs.mkdirSync(reportsDir, { recursive: true });
+    }
+
+    const filename = `credit_report_${creditReport._id}_${Date.now()}.pdf`;
+    localFilePath = path.join(reportsDir, filename);
+
+    const pdfResponse = await axios({
+      method: "GET",
+      url: reportUrl,
+      responseType: "stream",
+      timeout: 180000,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      },
+    });
+
+    const writer = fs.createWriteStream(localFilePath);
+
+    await new Promise((resolve, reject) => {
+      pdfResponse.data.on("error", reject);
+      writer.on("error", reject);
+      writer.on("finish", resolve);
+      pdfResponse.data.pipe(writer);
+    });
+
+    // Never treat HTML or another file type as a PDF.
+    if (!isValidPdf(localFilePath)) {
+      throw new Error(
+        "Downloaded report is not a valid PDF; expected %PDF- signature"
+      );
+    }
+
+    // Save the path only after validation succeeds.
+    creditReport.localPath = `/reports/${filename}`;
+
+    if (isIndiconnectBureau) {
+      creditReport.pdfStatus = "ready";
+    }
+
+    await creditReport.save();
+
+    console.log(`PDF downloaded and validated: ${filename}`);
+  } catch (downloadError) {
+    console.error("PDF DOWNLOAD ERROR:", downloadError.message);
+
+    // Remove an invalid or incomplete download.
+    if (localFilePath && fs.existsSync(localFilePath)) {
       try {
-        const reportsDir = path.join(__dirname, "../reports");
-
-        if (!fs.existsSync(reportsDir)) {
-          fs.mkdirSync(reportsDir, { recursive: true });
-        }
-
-        const filename = `credit_report_${creditReport._id}_${Date.now()}.pdf`;
-        const localFilePath = path.join(reportsDir, filename);
-
-        const pdfResponse = await axios({
-          method: "GET",
-          url: reportUrl,
-          responseType: "stream",
-          timeout: 180000,
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          },
-        });
-        const writer = fs.createWriteStream(localFilePath);
-
-        pdfResponse.data.pipe(writer);
-
-        await new Promise((resolve, reject) => {
-          writer.on("finish", resolve);
-          writer.on("error", reject);
-        });
-
-        creditReport.localPath = `/reports/${filename}`;
-        if (isIndiconnectBureau) creditReport.pdfStatus = "ready";
-        await creditReport.save();
-      } catch (downloadError) {
-        console.error("PDF DOWNLOAD ERROR:", downloadError.message);
+        fs.unlinkSync(localFilePath);
+      } catch (cleanupError) {
+        console.error("PDF CLEANUP ERROR:", cleanupError.message);
       }
     }
+  }
+}
 
     const noCibilRecord =
       isIndiconnectCibil &&
@@ -1839,45 +1868,60 @@ const checkCreditScoreV2 = async (req, res) => {
     // DOWNLOAD PDF LOCALLY
     // =========================
     if (reportUrl && !creditReport.localPath) {
+  let localFilePath;
+
+  try {
+    const reportsDir = path.join(__dirname, "../reports");
+
+    if (!fs.existsSync(reportsDir)) {
+      fs.mkdirSync(reportsDir, { recursive: true });
+    }
+
+    const filename = `credit_report_${creditReport._id}_${Date.now()}.pdf`;
+    localFilePath = path.join(reportsDir, filename);
+
+    const pdfResponse = await axios({
+      method: "GET",
+      url: reportUrl,
+      responseType: "stream",
+      timeout: 30000,
+    });
+
+    const writer = fs.createWriteStream(localFilePath);
+
+    await new Promise((resolve, reject) => {
+      pdfResponse.data.on("error", reject);
+      writer.on("error", reject);
+      writer.on("finish", resolve);
+
+      pdfResponse.data.pipe(writer);
+    });
+
+    // Verify the file is actually a PDF.
+    if (!isValidPdf(localFilePath)) {
+      throw new Error(
+        "Downloaded report is not a valid PDF; expected %PDF- signature"
+      );
+    }
+
+    // Save the local path only after validation succeeds.
+    creditReport.localPath = `/reports/${filename}`;
+    await creditReport.save();
+
+    console.log(`PDF downloaded and validated: ${filename}`);
+  } catch (downloadError) {
+    console.error("PDF DOWNLOAD ERROR:", downloadError.message);
+
+    // Remove incomplete or invalid files.
+    if (localFilePath && fs.existsSync(localFilePath)) {
       try {
-        // CREATE REPORTS FOLDER
-        const reportsDir = path.join(__dirname, "../reports");
-
-        if (!fs.existsSync(reportsDir)) {
-          fs.mkdirSync(reportsDir, { recursive: true });
-        }
-
-        // FILE NAME
-        const filename = `credit_report_${creditReport._id}_${Date.now()}.pdf`;
-
-        const localFilePath = path.join(reportsDir, filename);
-
-        // DOWNLOAD PDF
-        const pdfResponse = await axios({
-          method: "GET",
-          url: reportUrl,
-          responseType: "stream",
-          timeout: 30000,
-        });
-
-        // SAVE PDF
-        const writer = fs.createWriteStream(localFilePath);
-
-        pdfResponse.data.pipe(writer);
-
-        await new Promise((resolve, reject) => {
-          writer.on("finish", resolve);
-          writer.on("error", reject);
-        });
-
-        // SAVE LOCAL PATH
-        creditReport.localPath = `/reports/${filename}`;
-
-        await creditReport.save();
-      } catch (downloadError) {
-        console.log("PDF DOWNLOAD ERROR", downloadError.message);
+        fs.unlinkSync(localFilePath);
+      } catch (cleanupError) {
+        console.error("PDF CLEANUP ERROR:", cleanupError.message);
       }
     }
+  }
+}
 
     // =========================
     // FINAL RESPONSE

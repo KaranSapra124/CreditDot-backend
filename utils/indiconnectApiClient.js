@@ -477,9 +477,24 @@ const parseCibilResponse = (resData) => {
   };
 };
 
-const isHtmlReportUrl = (url) =>
-  typeof url === "string" &&
-  (url.includes("myscore.cibil.com") || url.includes("webtoken"));
+const isHtmlReportUrl = (url) => {
+  if (typeof url !== "string") return false;
+
+  try {
+    const parsedUrl = new URL(url);
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const pathname = parsedUrl.pathname.toLowerCase();
+
+    return (
+      hostname === "myscore.cibil.com" ||
+      hostname.includes("webtoken") ||
+      pathname.endsWith(".html") ||
+      pathname.endsWith(".htm")
+    );
+  } catch {
+    return false;
+  }
+};
 
 // Returns a failure message when an IndiConnect bureau result is unusable
 // (transport-level error, or a null/empty result envelope like the
